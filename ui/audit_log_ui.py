@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import pandas as pd
+import html
+
 import streamlit as st
 
 from tools.supabase import get_supabase_client
@@ -39,8 +40,7 @@ def render() -> None:
         st.info("No writes recorded yet.")
         return
 
-    df = pd.DataFrame(rows)
-    st.dataframe(df.drop(columns=["id"], errors="ignore"), use_container_width=True)
+    st.markdown(_audit_rows_table(rows), unsafe_allow_html=True)
 
     options = {f"{row['executed_at']} | {row['target_table']} | {row['operation']}": row["id"] for row in rows}
     selected = st.selectbox("View SQL", [""] + list(options.keys()))
@@ -57,3 +57,36 @@ def render() -> None:
         urls = (full.data or {}).get("source_urls") or []
         if urls:
             st.caption("Sources: " + ", ".join(urls))
+
+
+def _audit_rows_table(rows: list[dict]) -> str:
+    columns = ["executed_at", "intent", "target_table", "operation", "row_count", "session_id"]
+    labels = {
+        "executed_at": "Executed At",
+        "intent": "Intent",
+        "target_table": "Target Table",
+        "operation": "Operation",
+        "row_count": "Rows",
+        "session_id": "Session",
+    }
+    header = "".join(f"<th>{labels[column]}</th>" for column in columns)
+    body = "\n".join(
+        "<tr>"
+        + "".join(f"<td>{html.escape(_format_cell(row.get(column)))}</td>" for column in columns)
+        + "</tr>"
+        for row in rows
+    )
+    return f"""
+<table class="audit-log-table">
+  <thead><tr>{header}</tr></thead>
+  <tbody>
+    {body}
+  </tbody>
+</table>
+"""
+
+
+def _format_cell(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value)

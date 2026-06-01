@@ -9,8 +9,9 @@ from agent.graph import route_after_research, route_confirmed, route_intent
 from agent.nodes import intent, nl_query, research, write_gate
 from agent.state import AgentState
 from tools.sql import ensure_select_only
+from ui.audit_log_ui import _audit_rows_table
 from ui.chat import WORKFLOW_LABELS
-from ui.query_results_ui import _coerce_rows_for_display
+from ui.query_results_ui import _coerce_rows_for_display, _rows_table
 
 
 def actions(**overrides: bool) -> dict[str, bool]:
@@ -252,6 +253,32 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(display_rows[1]["key_elements_or_rules"], '{"rule": "three"}')
         self.assertEqual(display_rows[2]["key_elements_or_rules"], "four")
         self.assertIsNone(display_rows[2]["notes"])
+
+    def test_query_results_table_escapes_values(self) -> None:
+        html = _rows_table([{"name": "<script>", "count": 2}])
+
+        self.assertIn("<table", html)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertNotIn("<script>", html)
+
+    def test_audit_log_table_renders_without_dataframe_component(self) -> None:
+        html = _audit_rows_table(
+            [
+                {
+                    "id": "hidden",
+                    "executed_at": "2026-06-01",
+                    "intent": "write",
+                    "target_table": "<foods>",
+                    "operation": "upsert",
+                    "row_count": 3,
+                    "session_id": "abc123",
+                }
+            ]
+        )
+
+        self.assertIn("<table", html)
+        self.assertIn("&lt;foods&gt;", html)
+        self.assertNotIn("hidden", html)
 
     def test_write_gate_cancellation_stops_before_db_write(self) -> None:
         state = AgentState(
