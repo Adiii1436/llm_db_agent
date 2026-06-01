@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from agent.state import as_state
-from tools.gemini import generate_json
+from tools.gemini import generate_json, generate_text
 from tools.sql import normalize_identifier
 from tools.tavily import tavily_extract, tavily_search
 
@@ -48,7 +48,7 @@ def run(state: Any) -> dict[str, Any]:
             raw_extracted = _raw_from_search_results(search_results[:MAX_EXTRACT_URLS])
 
         structured_rows = _extract_rows(current, raw_extracted, search_results)
-        response = _research_response(structured_rows, raw_extracted)
+        response = _research_response(current, structured_rows, raw_extracted, search_results)
         error = None if structured_rows else "no_structured_rows"
         artifact = _build_artifact(current, structured_rows, raw_extracted)
         artifacts = _append_artifact(current.structured_artifacts, artifact) if artifact else current.structured_artifacts
@@ -57,7 +57,7 @@ def run(state: Any) -> dict[str, Any]:
             "extracted_urls": list(raw_extracted.keys()),
             "raw_extracted": raw_extracted,
             "structured_rows": structured_rows,
-            "display_rows": structured_rows if current.intent == "research" else [],
+            "display_rows": structured_rows if _should_display_table(current) else [],
             "structured_artifacts": artifacts,
             "active_artifact_id": artifact.get("id") if artifact else current.active_artifact_id,
             "target_table": artifact.get("table_name") if artifact and not current.target_table else current.target_table,
@@ -305,10 +305,75 @@ def _raw_from_search_results(results: list[dict[str, Any]]) -> dict[str, str]:
     return raw
 
 
-def _research_response(rows: list[dict[str, Any]], raw_extracted: dict[str, str]) -> str:
+def _should_display_table(current: Any) -> bool:
+    return bool(
+        current.requested_actions.get("create_table")
+        or current.requested_actions.get("upsert_table")
+        or current.intent == "write"
+    )
+
+
+def _research_response(
+    current: Any,
+    rows: list[dict[str, Any]],
+    raw_extracted: dict[str, str],
+    search_results: list[dict[str, Any]],
+) -> str:
     if not raw_extracted:
         return "I did not find extractable pages for that request."
     if not rows:
         return f"I extracted {len(raw_extracted)} page(s), but could not confidently structure rows from them."
-    columns = sorted({key for row in rows for key in row.keys()})
-    return f"I extracted {len(rows)} structured row(s) from {len(raw_extracted)} page(s). Columns: {', '.join(columns)}."
+
+    answer = _summarize_research(current.user_message, rows, raw_extracted, search_results)
+    if answer:
+        return answer
+
+    columns = sorted({key for row in rows for key in row.keys() if key != "source_url"})
+    if _should_display_table(current):
+        return f"I found {len(rows)} relevant item(s) and extracted them into a table with columns: {', '.join(columns)}."
+    return _fallback_text_summary(rows)
+
+
+def _summarize_research(
+    user_message: str,
+    rows: list[dict[str, Any]],
+    raw_extracted: dict[str, str],
+    search_results: list[dict[str, Any]],
+) -> str:
+    prompt = f"""
+Answer the user's research request using only the extracted evidence rows.
+
+User request:
+{user_message}
+
+Extracted rows:
+{json.dumps(rows[:30], ensure_ascii=False, default=str)}
+
+Source pages:
+{json.dumps(list(raw_extracted.keys()) or [result.get("url") for result in search_results[:5]], ensure_ascii=False)}
+
+Rules:
+- Give a normal prose answer, like an analyst briefing.
+- Do not include a markdown table.
+- Mention key patterns, caveats, and useful source-backed details.
+- Keep it concise.
+"""
+    try:
+        return generate_text(prompt).strip()
+    except Exception:
+        return ""
+
+
+def _fallback_text_summary(rows: list[dict[str, Any]]) -> str:
+    examples: list[str] = []
+    for row in rows[:5]:
+        values = [
+            str(value)
+            for key, value in row.items()
+            if key != "source_url" and value not in (None, "", [], {})
+        ]
+        if values:
+            examples.append("; ".join(values[:3]))
+    if not examples:
+        return f"I found {len(rows)} relevant item(s), but the extracted details were sparse."
+    return "I found these main patterns: " + " ".join(f"{item}." for item in examples)

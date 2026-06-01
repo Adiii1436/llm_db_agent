@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 try:
@@ -20,19 +21,29 @@ def state_to_dict(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
-def stream_graph(input_value: Any, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def stream_graph(
+    input_value: Any,
+    config: dict[str, Any],
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     events: list[Any] = []
     for event in graph.stream(input_value, config=config, stream_mode="values"):
         events.append(event)
+        if on_event:
+            on_event(state_to_dict(event))
     last_state = state_to_dict(events[-1]) if events else state_to_dict(graph.get_state(config).values)
     return last_state, find_interrupt(config, events)
 
 
-def resume_graph(payload: dict[str, Any], config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def resume_graph(
+    payload: dict[str, Any],
+    config: dict[str, Any],
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     if Command is None:
         graph.update_state(config, payload)
-        return stream_graph(None, config)
-    return stream_graph(Command(resume=payload), config)
+        return stream_graph(None, config, on_event=on_event)
+    return stream_graph(Command(resume=payload), config, on_event=on_event)
 
 
 def find_interrupt(config: dict[str, Any], events: list[Any] | None = None) -> dict[str, Any] | None:

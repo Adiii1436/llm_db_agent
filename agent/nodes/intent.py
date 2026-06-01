@@ -41,15 +41,23 @@ def run(state: Any) -> dict[str, Any]:
         target_table = None
     structured_rows = artifact.get("rows", []) if artifact else []
     extracted_urls = artifact.get("source_urls", []) if artifact else []
+    display_rows = structured_rows if artifact and _should_display_existing_artifact(current.requested_actions) else []
 
     if _cannot_write_without_source(intent, effective_message, artifact, current.requested_actions):
         intent = "unknown"
-        response = "I do not have an extracted table in this chat to upsert. Ask me to research one first, or name the source data to write."
+        response = (
+            "Upsert needs source data first. Turn on Research with a data extraction request, "
+            "or extract a table in this chat and then ask me to upsert that data."
+        )
+    elif artifact and current.requested_actions.get("upsert_table"):
+        response = "I found the extracted table in this chat and will prepare it for upsert after you confirm the SQL."
+    elif artifact and current.requested_actions.get("create_table"):
+        response = "I found the extracted data in this chat and displayed it as a table below."
     elif intent == "unknown" and target_table:
         intent = "query"
         response = ""
     else:
-        response = "" if intent != "unknown" else "I need a little more detail. Should I research the web, query the database, design a schema, or prepare a write?"
+        response = "" if intent != "unknown" else "I need a little more detail. Should I research the web, extract a table, query saved data, or upsert data?"
 
     target_table = normalize_identifier(target_table) if target_table else None
 
@@ -61,7 +69,7 @@ def run(state: Any) -> dict[str, Any]:
         "extracted_urls": extracted_urls,
         "raw_extracted": {},
         "structured_rows": structured_rows,
-        "display_rows": [],
+        "display_rows": display_rows,
         "table_exists": False,
         "schema_source": None,
         "proposed_ddl": None,
@@ -117,6 +125,10 @@ def _cannot_write_without_source(
     return _references_previous_table(message)
 
 
+def _should_display_existing_artifact(actions: dict[str, bool]) -> bool:
+    return bool(actions.get("create_table") or actions.get("upsert_table"))
+
+
 def _effective_user_message(message: str, session_history: list[dict[str, str]]) -> str:
     if not _is_procedural_followup(message):
         return message
@@ -132,7 +144,9 @@ def _is_procedural_followup(message: str) -> bool:
     if _has_research_subject(message):
         return False
     return bool(
-        re.search(r"\b(research|search|web|schema|write|upsert|save|store|insert|prepare|design)\b", text)
+        re.search(r"\b(research|researched|search|web|schema|write|upsert|save|store|insert|prepare|design)\b", text)
+        or re.search(r"\b(table|tabular)\s+format\b", text)
+        or re.search(r"\bformat\s+(?:it|this|that|the\s+data)\s+as\s+(?:a\s+)?table\b", text)
         or _references_previous_table(message)
     )
 
@@ -243,6 +257,8 @@ def _references_previous_table(message: str) -> bool:
     text = message.lower()
     return bool(
         re.search(r"\b(this|that|the|last|latest|previous|above|created|extracted)\s+(table|rows?|data|result|results)\b", text)
+        or re.search(r"\b(researched|research|source|found)\s+(data|rows?|results?|findings)\b", text)
+        or re.search(r"\b(data|rows?|results?|findings)\s+(from|in)\s+(?:the\s+)?(?:last|latest|previous|research|search)\b", text)
         or re.search(r"\b(table|rows?|data|result|results)\s+(above|created|extracted)\b", text)
         or re.search(r"\b(upsert|save|store|write|insert)\s+(it|this|that)\b", text)
     )

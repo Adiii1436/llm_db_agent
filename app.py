@@ -28,10 +28,14 @@ if "thread_id" not in st.session_state:
 
 render_sidebar()
 
-tab_chat, tab_audit = st.tabs(["Chat", "Audit Log"])
+active_view = st.segmented_control(
+    "View",
+    ["Chat", "Audit Log"],
+    key="active_view",
+    label_visibility="collapsed",
+)
 
-with tab_chat:
+if active_view != "Audit Log":
     chat.render()
-
-with tab_audit:
+else:
     audit_log_ui.render()

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import streamlit as st
 
+from ui.audit_log_ui import clear_audit_cache
 from ui.graph_runner import resume_graph
+from ui.sidebar import clear_sidebar_cache
 
 
 def render_write_gate() -> None:
@@ -31,6 +33,9 @@ def _continue(payload: dict, config: dict) -> None:
     st.session_state.awaiting_confirmation = False
     last_state, interrupt_payload = resume_graph(payload, config)
     st.session_state.graph_state = last_state
+    if payload.get("user_confirmed") and not interrupt_payload:
+        clear_sidebar_cache()
+        clear_audit_cache()
     if interrupt_payload:
         st.session_state.pending_interrupt = interrupt_payload
         st.session_state.awaiting_confirmation = interrupt_payload.get("kind") == "write_gate"
