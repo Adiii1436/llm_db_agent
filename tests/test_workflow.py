@@ -76,6 +76,54 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(output["response_to_user"], "Acme has a Starter plan priced at 10.")
         self.assertEqual(output["error"], None)
 
+    def test_research_only_answers_from_evidence_when_row_extraction_fails(self) -> None:
+        with (
+            patch.object(research, "tavily_search", return_value=[]),
+            patch.object(
+                research,
+                "tavily_extract",
+                return_value={"https://example.com/gen-z-food": "Gen Z values convenient healthy meals with protein."},
+            ),
+            patch.object(research, "generate_json", return_value={"rows": []}),
+            patch.object(research, "generate_text", return_value="Gen Z food demand is shaped by convenience and health."),
+        ):
+            output = research.run(
+                {
+                    "user_message": "Research what genz prefer in food items and nutrients.",
+                    "requested_actions": actions(research=True),
+                    "intent": "research",
+                }
+            )
+
+        self.assertEqual(output["structured_rows"], [])
+        self.assertEqual(output["display_rows"], [])
+        self.assertEqual(output["error"], None)
+        self.assertEqual(output["response_to_user"], "Gen Z food demand is shaped by convenience and health.")
+        self.assertNotIn("could not confidently structure rows", output["response_to_user"])
+
+    def test_extract_table_still_requires_structured_rows(self) -> None:
+        with (
+            patch.object(research, "tavily_search", return_value=[]),
+            patch.object(
+                research,
+                "tavily_extract",
+                return_value={"https://example.com/gen-z-food": "Gen Z values convenient healthy meals with protein."},
+            ),
+            patch.object(research, "generate_json", return_value={"rows": []}),
+        ):
+            output = research.run(
+                {
+                    "user_message": "Research what genz prefer in food items and nutrients.",
+                    "requested_actions": actions(create_table=True),
+                    "intent": "research",
+                }
+            )
+
+        self.assertEqual(output["structured_rows"], [])
+        self.assertEqual(output["display_rows"], [])
+        self.assertEqual(output["error"], "no_structured_rows")
+        self.assertIn("could not confidently structure rows", output["response_to_user"])
+
     def test_extract_table_returns_text_and_table_display(self) -> None:
         rows = [
             {

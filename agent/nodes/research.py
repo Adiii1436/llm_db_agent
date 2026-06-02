@@ -79,9 +79,10 @@ def run(state: Any) -> dict[str, Any]:
         if not raw_extracted and search_results:
             raw_extracted = _raw_from_search_results(search_results[:MAX_EXTRACT_URLS])
 
-        structured_rows = _extract_rows(current, raw_extracted, search_results)
-        response = _research_response(current, structured_rows, raw_extracted, search_results)
-        error = None if structured_rows else "no_structured_rows"
+        evidence = _build_evidence(current.user_message, raw_extracted, search_results)
+        structured_rows = _extract_rows(current, evidence)
+        response = _research_response(current, structured_rows, raw_extracted, search_results, evidence)
+        error = "no_structured_rows" if _requires_structured_rows(current) and not structured_rows else None
         artifact = _build_artifact(current, structured_rows, raw_extracted)
         artifacts = _append_artifact(current.structured_artifacts, artifact) if artifact else current.structured_artifacts
         return {
@@ -133,8 +134,7 @@ def _select_urls(results: list[dict[str, Any]]) -> list[str]:
     return urls[:MAX_EXTRACT_URLS]
 
 
-def _extract_rows(current, raw_extracted: dict[str, str], search_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    evidence = _build_evidence(current.user_message, raw_extracted, search_results)
+def _extract_rows(current, evidence: str) -> list[dict[str, Any]]:
     if not evidence.strip():
         return []
 
@@ -503,20 +503,38 @@ def _should_display_table(current: Any) -> bool:
     )
 
 
+def _requires_structured_rows(current: Any) -> bool:
+    return bool(
+        current.requested_actions.get("create_table")
+        or current.requested_actions.get("upsert_table")
+        or current.intent == "write"
+    )
+
+
 def _research_response(
     current: Any,
     rows: list[dict[str, Any]],
     raw_extracted: dict[str, str],
     search_results: list[dict[str, Any]],
+    evidence: str,
 ) -> str:
-    if not raw_extracted:
+    if not raw_extracted and not search_results:
         return "I did not find extractable pages for that request."
-    if not rows:
+    if not rows and _requires_structured_rows(current):
         return f"I extracted {len(raw_extracted)} page(s), but could not confidently structure rows from them."
+    if not rows:
+        answer = _answer_research_from_evidence(current.user_message, evidence, raw_extracted, search_results)
+        if answer:
+            return answer
+        return "I found sources for the research request, but could not produce a reliable evidence-backed answer."
 
     answer = _summarize_research(current.user_message, rows, raw_extracted, search_results)
     if answer:
         return answer
+    if not _requires_structured_rows(current):
+        answer = _answer_research_from_evidence(current.user_message, evidence, raw_extracted, search_results)
+        if answer:
+            return answer
 
     columns = sorted({key for row in rows for key in row.keys() if key != "source_url"})
     if _should_display_table(current):
@@ -547,6 +565,41 @@ Rules:
 - Do not include a markdown table.
 - Mention key patterns, caveats, and useful source-backed details.
 - Keep it concise.
+"""
+    try:
+        return generate_text(prompt).strip()
+    except Exception:
+        return ""
+
+
+def _answer_research_from_evidence(
+    user_message: str,
+    evidence: str,
+    raw_extracted: dict[str, str],
+    search_results: list[dict[str, Any]],
+) -> str:
+    if not evidence.strip():
+        return ""
+    prompt = f"""
+Answer the user's research request using only the evidence below.
+
+User request:
+{user_message}
+
+Evidence:
+{evidence[:MAX_EVIDENCE_CHARS]}
+
+Source pages:
+{json.dumps(list(raw_extracted.keys()) or [result.get("url") for result in search_results[:5]], ensure_ascii=False)}
+
+Rules:
+- Give a normal prose answer, like an analyst briefing.
+- Do not mention table extraction or structured rows.
+- Do not include a markdown table.
+- Separate what the evidence supports from what is uncertain.
+- If the evidence does not contain exact order frequency or nutrient details, say that clearly and give the closest supported pattern.
+- Do not invent statistics, sources, nutrients, or food preferences.
+- Keep it concise but useful for a marketing team.
 """
     try:
         return generate_text(prompt).strip()
