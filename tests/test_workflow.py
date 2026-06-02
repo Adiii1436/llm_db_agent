@@ -412,6 +412,24 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertEqual(result, {"rows": []})
 
+    def test_gemini_prefers_user_session_key_in_streamlit(self) -> None:
+        with (
+            patch.object(gemini, "_in_streamlit_runtime", return_value=True),
+            patch.object(gemini, "_streamlit_session_api_key", return_value="user-key"),
+            patch.dict("os.environ", {"GEMINI_API_KEY": "deployment-key"}),
+        ):
+            self.assertEqual(gemini._active_api_key(), "user-key")
+
+    def test_gemini_does_not_use_env_key_in_streamlit(self) -> None:
+        with (
+            patch.object(gemini, "_in_streamlit_runtime", return_value=True),
+            patch.object(gemini, "_streamlit_session_api_key", return_value=None),
+            patch.dict("os.environ", {"GEMINI_API_KEY": "deployment-key"}),
+        ):
+            self.assertIsNone(gemini._active_api_key())
+            with self.assertRaisesRegex(RuntimeError, "sidebar"):
+                gemini.get_client()
+
     def test_write_gate_cancellation_stops_before_db_write(self) -> None:
         state = AgentState(
             intent="write",

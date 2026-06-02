@@ -5,6 +5,7 @@ from typing import Any
 
 import streamlit as st
 
+from tools.gemini import has_runtime_api_key
 from ui.graph_runner import stream_graph
 from ui.query_results_ui import render_query_results
 from ui.schema_ui import render_schema_negotiation
@@ -90,16 +91,30 @@ def _render_workflow_controls() -> dict[str, bool]:
 
 
 def _render_query_form() -> str | None:
+    gemini_ready = has_runtime_api_key()
+    if not gemini_ready:
+        st.info("Add your Gemini API key in the sidebar to begin.")
+
     with st.form("query_form", clear_on_submit=True, border=False):
         input_col, submit_col = st.columns([12, 1])
         with input_col:
             prompt = st.text_input(
                 "Query",
-                placeholder="Ask me to research, extract a table, query saved data, or save data...",
+                placeholder=(
+                    "Ask me to research, extract a table, query saved data, or save data..."
+                    if gemini_ready
+                    else "Waiting for your Gemini API key..."
+                ),
+                disabled=not gemini_ready,
                 label_visibility="collapsed",
             )
         with submit_col:
-            submitted = st.form_submit_button("Send", type="primary", use_container_width=True)
+            submitted = st.form_submit_button(
+                "Send",
+                type="primary",
+                use_container_width=True,
+                disabled=not gemini_ready,
+            )
 
     if not submitted:
         return None

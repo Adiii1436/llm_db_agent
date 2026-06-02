@@ -10,18 +10,58 @@ from google import genai
 
 
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+SESSION_GEMINI_API_KEY = "gemini_api_key"
 
 
 def get_model_name() -> str:
     return os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
 
 
-@lru_cache(maxsize=1)
+def has_runtime_api_key() -> bool:
+    return bool(_active_api_key())
+
+
 def get_client() -> genai.Client:
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = _active_api_key()
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is not set.")
+        raise RuntimeError("Enter your Gemini API key in the sidebar to continue.")
+    return _client_for_api_key(api_key)
+
+
+@lru_cache(maxsize=8)
+def _client_for_api_key(api_key: str) -> genai.Client:
     return genai.Client(api_key=api_key)
+
+
+def _active_api_key() -> str | None:
+    session_key = _streamlit_session_api_key()
+    if session_key or _in_streamlit_runtime():
+        return session_key
+
+    env_key = os.getenv("GEMINI_API_KEY")
+    return env_key.strip() if env_key else None
+
+
+def _streamlit_session_api_key() -> str | None:
+    if not _in_streamlit_runtime():
+        return None
+
+    try:
+        import streamlit as st
+
+        api_key = st.session_state.get(SESSION_GEMINI_API_KEY, "")
+    except Exception:
+        return None
+    return api_key.strip() or None
+
+
+def _in_streamlit_runtime() -> bool:
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
 
 
 def generate_text(prompt: str, system: str = "", temperature: float = 0.2) -> str:
