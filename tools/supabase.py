@@ -111,40 +111,14 @@ def list_tables() -> list[str]:
     return [str(row["table_name"]) for row in rows]
 
 
-def list_research_tables() -> list[dict[str, Any]]:
+def list_research_tables() -> list[str]:
     actual_tables = [
         table
         for table in list_tables()
         if table not in {"agent_audit_log", "schema_registry"}
     ]
-    actual_set = set(actual_tables)
-    try:
-        registered = fetch_all(
-            """
-            SELECT table_name
-            FROM schema_registry
-            ORDER BY last_updated DESC, table_name
-            """
-        )
-        tables = [
-            str(row["table_name"])
-            for row in registered
-            if str(row["table_name"]) in actual_set
-        ]
-        if not tables:
-            tables = actual_tables
-    except Exception:
-        tables = actual_tables
-
-    summaries: list[dict[str, Any]] = []
-    for table in tables:
-        try:
-            count_rows = fetch_all(f"SELECT count(*) AS row_count FROM {quote_ident(table)}")
-            row_count = int(count_rows[0]["row_count"]) if count_rows else 0
-        except Exception:
-            row_count = None
-        summaries.append({"table_name": table, "row_count": row_count})
-    return summaries
+    
+    return actual_tables
 
 
 def get_columns(table_name: str | None = None) -> list[dict[str, Any]]:

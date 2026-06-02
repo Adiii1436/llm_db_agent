@@ -47,17 +47,67 @@ def _rows_table(rows: list[dict]) -> str:
     header = "".join(f"<th>{html.escape(str(column))}</th>" for column in columns)
     body = "\n".join(
         "<tr>"
-        + "".join(f"<td>{html.escape(_display_cell(row.get(column)))}</td>" for column in columns)
+        + "".join(
+            f'<td><div class="query-results-cell">{html.escape(_display_cell(row.get(column)))}</div></td>'
+            for column in columns
+        )
         + "</tr>"
         for row in rows
     )
     return f"""
-<table class="query-results-table">
-  <thead><tr>{header}</tr></thead>
-  <tbody>
-    {body}
-  </tbody>
-</table>
+<style>
+  .query-results-wrap {{
+    max-height: 360px;
+    overflow: auto;
+    border: 1px solid rgba(250, 250, 250, 0.12);
+    border-radius: 6px;
+  }}
+
+  .query-results-table {{
+    width: max-content;
+    min-width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 0.78rem;
+    line-height: 1.25;
+  }}
+
+  .query-results-table th,
+  .query-results-table td {{
+    max-width: 220px;
+    padding: 0.35rem 0.5rem;
+    border-right: 1px solid rgba(250, 250, 250, 0.10);
+    border-bottom: 1px solid rgba(250, 250, 250, 0.10);
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }}
+
+  .query-results-table th {{
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: rgb(14, 17, 23);
+    font-weight: 700;
+    white-space: nowrap;
+  }}
+
+  .query-results-table td {{
+    height: 1%;
+  }}
+
+  .query-results-cell {{
+    max-height: 4.8rem;
+    overflow: auto;
+  }}
+</style>
+<div class="query-results-wrap">
+  <table class="query-results-table">
+    <thead><tr>{header}</tr></thead>
+    <tbody>
+      {body}
+    </tbody>
+  </table>
+</div>
 """
 
 

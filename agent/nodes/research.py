@@ -11,8 +11,8 @@ from tools.tavily import tavily_extract, tavily_search
 
 
 URL_RE = re.compile(r"https?://[^\s)>\]]+")
-MAX_EXTRACT_URLS = 3
-MAX_EVIDENCE_CHARS = 24000
+MAX_EXTRACT_URLS = 5
+MAX_EVIDENCE_CHARS = 32000
 KEY_TERMS = (
     "price",
     "pricing",
@@ -26,6 +26,38 @@ KEY_TERMS = (
     "plan",
     "api",
     "$",
+)
+FOOD_NUTRITION_TERMS = (
+    "gen z",
+    "gen-z",
+    "food",
+    "foods",
+    "order",
+    "orders",
+    "ordered",
+    "restaurant",
+    "delivery",
+    "preference",
+    "preferences",
+    "frequent",
+    "frequency",
+    "health",
+    "healthy",
+    "nutrition",
+    "nutrient",
+    "nutrients",
+    "protein",
+    "fiber",
+    "vitamin",
+    "vitamins",
+    "mineral",
+    "minerals",
+    "sugar",
+    "calorie",
+    "plant-based",
+    "fresh",
+    "natural",
+    "organic",
 )
 
 
@@ -85,6 +117,8 @@ def _build_search_query(message: str) -> str:
     lower = text.lower()
     if "llm" in lower and ("price" in lower or "pricing" in lower or "tier" in lower):
         return "LLM API pricing input output price per million tokens OpenAI Anthropic Google Gemini Mistral xAI"
+    if _is_food_nutrition_request(lower):
+        return "Gen Z food preferences most frequently ordered food items nutrients nutrition healthy food delivery restaurant trends"
     return text or message
 
 
@@ -105,13 +139,16 @@ def _extract_rows(current, raw_extracted: dict[str, str], search_results: list[d
         return []
 
     field_contract = _field_contract(current.user_message, current.target_table)
+    important_fields = _important_columns(current.user_message, current.target_table, [])
     prompt = f"""
 You are a structured data extraction agent.
 Extract rows from the evidence below.
 
 Hard rules:
 - Return only valid JSON with this exact shape: {{"rows": [{{...}}]}}
-- If a value is missing in the evidence, use null.
+- Prefer detailed rows where user-critical fields can be filled from evidence.
+- If an optional value is missing in the evidence, use null.
+- Do not include rows that cannot support the important fields requested by the user.
 - Do not invent prices, providers, model names, or URLs.
 - One row should represent one concrete entity from the user request.
 - Keep numeric price fields as numbers, not strings.
@@ -123,6 +160,9 @@ User request: {current.user_message}
 Expected fields:
 {field_contract}
 
+Important fields that must be complete when present in the expected fields:
+{json.dumps(important_fields, ensure_ascii=False)}
+
 Evidence:
 {evidence}
 """
@@ -130,7 +170,7 @@ Evidence:
     if isinstance(extracted, list):
         extracted = {"rows": extracted}
     rows = extracted.get("rows", []) if isinstance(extracted, dict) else []
-    return _clean_rows(rows)
+    return _quality_gate_rows(current, rows, evidence)
 
 
 def _build_evidence(
@@ -173,7 +213,7 @@ def _compact_text(user_message: str, text: str) -> str:
     scored: list[tuple[int, int, str]] = []
     for index, line in enumerate(lines):
         lower = line.lower()
-        score = sum(3 for term in KEY_TERMS if term in lower)
+        score = sum(3 for term in _key_terms_for_message(user_message) if term in lower)
         score += sum(1 for term in query_terms if term and term in lower)
         if "$" in line or re.search(r"\b\d+(?:\.\d+)?\s*(?:/|per)\s*(?:m|million|1m)\b", lower):
             score += 4
@@ -190,16 +230,42 @@ def _compact_text(user_message: str, text: str) -> str:
     return "\n".join(lines[index] for index in sorted(selected_indexes))[:10000]
 
 
+def _key_terms_for_message(user_message: str) -> tuple[str, ...]:
+    if _is_food_nutrition_request(user_message):
+        return KEY_TERMS + FOOD_NUTRITION_TERMS
+    return KEY_TERMS
+
+
+def _is_food_nutrition_request(text: str) -> bool:
+    lower = text.lower()
+    return "food" in lower and (
+        "gen z" in lower
+        or "genz" in lower
+        or "generation z" in lower
+        or "nutrition" in lower
+        or "nutrient" in lower
+        or "healthy" in lower
+        or "health" in lower
+    )
+
+
 def _field_contract(user_message: str, target_table: str | None) -> str:
     text = f"{user_message} {target_table or ''}".lower()
-    if "food" in text and ("nutrition" in text or "nutritional" in text or "diet" in text or "benefit" in text):
+    if "food" in text and (
+        "nutrition" in text
+        or "nutritional" in text
+        or "nutrient" in text
+        or "diet" in text
+        or "benefit" in text
+    ):
         return json.dumps(
             {
-                "food_name": "food name",
-                "food_category": "fruit, vegetable, grain, protein, dairy, nut/seed, or other category",
-                "nutritional_benefits": "concise benefit summary",
-                "key_nutrients": "list of important nutrients when available",
-                "diet_notes": "short practical note for diet planning, or null",
+                "preference_item": "food item, cuisine, meal type, or food category preferred by the audience",
+                "audience_segment": "consumer segment, such as Gen Z, when known",
+                "order_frequency_signal": "evidence about how often or commonly it is ordered, or null",
+                "preference_driver": "why the audience prefers it, such as convenience, taste, value, health, or novelty",
+                "key_nutrients": "nutrients or nutrition attributes mentioned in the evidence, or null",
+                "marketing_note": "short implication for food delivery or restaurant marketing, or null",
                 "source_url": "URL used as evidence",
             },
             indent=2,
@@ -239,6 +305,128 @@ def _clean_rows(rows: Any) -> list[dict[str, Any]]:
         if meaningful_values:
             cleaned.append(normalized)
     return cleaned
+
+
+def _quality_gate_rows(current: Any, rows: Any, evidence: str) -> list[dict[str, Any]]:
+    cleaned = _clean_rows(rows)
+    if not cleaned:
+        return []
+
+    important_columns = _important_columns(current.user_message, current.target_table, cleaned)
+    if important_columns and _has_missing_required_cells(cleaned, important_columns):
+        repaired = _repair_rows_from_evidence(current, cleaned, important_columns, evidence)
+        if repaired:
+            cleaned = _clean_rows(repaired)
+
+    return _prune_sparse_table(cleaned, important_columns)
+
+
+def _important_columns(user_message: str, target_table: str | None, rows: list[dict[str, Any]]) -> list[str]:
+    columns = _ordered_columns(rows)
+    text = f"{user_message} {target_table or ''}".lower()
+    important: set[str] = {"source_url"}
+    if _is_food_nutrition_request(text):
+        ordered = [
+            "preference_item",
+            "audience_segment",
+            "preference_driver",
+            "key_nutrients",
+            "marketing_note",
+            "source_url",
+        ]
+        if re.search(r"\b(order|ordered|orders|frequent|frequently|frequency)\b", text):
+            ordered.insert(2, "order_frequency_signal")
+        return ordered
+    elif "llm" in text and ("pricing" in text or "price" in text or "tier" in text):
+        important.update({"provider", "model", "product_type", "currency", "source_url"})
+    return [column for column in columns if column in important]
+
+
+def _repair_rows_from_evidence(
+    current: Any,
+    rows: list[dict[str, Any]],
+    important_columns: list[str],
+    evidence: str,
+) -> list[dict[str, Any]]:
+    prompt = f"""
+You are a table quality reviewer for web research extraction.
+Repair the extracted rows using only the evidence below.
+
+Hard rules:
+- Return only valid JSON with this exact shape: {{"rows": [{{...}}]}}
+- Keep only rows that can be populated with evidence-backed values for every important column.
+- Fill missing important columns with concise, specific values from the evidence.
+- Do not invent facts. If a row cannot support an important column, remove that row.
+- Drop optional columns that are sparse or not useful.
+- Preserve source_url for every row.
+- Prefer detailed but compact cell values, not blanks or nulls.
+
+Important columns:
+{json.dumps(important_columns, ensure_ascii=False)}
+
+User request:
+{current.user_message}
+
+Current rows:
+{json.dumps(rows[:40], ensure_ascii=False, default=str)}
+
+Evidence:
+{evidence[:MAX_EVIDENCE_CHARS]}
+"""
+    repaired = generate_json(prompt, fallback={"rows": rows})
+    if isinstance(repaired, list):
+        return repaired
+    if isinstance(repaired, dict) and isinstance(repaired.get("rows"), list):
+        return repaired["rows"]
+    return rows
+
+
+def _prune_sparse_table(rows: list[dict[str, Any]], important_columns: list[str]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+
+    important = set(important_columns)
+    complete_rows = [
+        row
+        for row in rows
+        if all(not _is_empty_cell(row.get(column)) for column in important)
+    ]
+    if important and not complete_rows:
+        return []
+    if important:
+        rows = complete_rows
+
+    columns = _ordered_columns(rows)
+    kept_columns = [
+        column
+        for column in columns
+        if column in important or all(not _is_empty_cell(row.get(column)) for row in rows)
+    ]
+    if not kept_columns:
+        return []
+
+    return [
+        {column: row.get(column) for column in kept_columns}
+        for row in rows
+        if any(not _is_empty_cell(row.get(column)) for column in kept_columns if column != "source_url")
+    ]
+
+
+def _has_missing_required_cells(rows: list[dict[str, Any]], columns: list[str]) -> bool:
+    return any(_is_empty_cell(row.get(column)) for row in rows for column in columns)
+
+
+def _ordered_columns(rows: list[dict[str, Any]]) -> list[str]:
+    columns: list[str] = []
+    for row in rows:
+        for column in row:
+            if column not in columns:
+                columns.append(column)
+    return columns
+
+
+def _is_empty_cell(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
 
 
 def _build_artifact(current, rows: list[dict[str, Any]], raw_extracted: dict[str, str]) -> dict[str, Any] | None:
@@ -285,8 +473,10 @@ def _suggest_table_name(user_message: str, rows: list[dict[str, Any]]) -> str:
     ]
     if "hospital" in text and "cancer" in text:
         return "cancer_hospitals"
-    if "food" in text and ("nutrition" in text or "diet" in text or "benefit" in text):
-        return "foods"
+    if "gen" in text and "food" in text:
+        return "gen_z_food_preferences"
+    if "food" in text and ("nutrition" in text or "nutrient" in text or "diet" in text or "benefit" in text):
+        return "food_preferences"
     if prefixes:
         prefix = prefixes[0]
         return prefix if prefix.endswith("s") else f"{prefix}s"

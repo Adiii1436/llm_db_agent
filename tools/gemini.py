@@ -36,15 +36,23 @@ def generate_text(prompt: str, system: str = "", temperature: float = 0.2) -> st
 
 def generate_json(prompt: str, system: str = "", fallback: Any | None = None) -> Any:
     text = generate_text(prompt, system=system)
-    try:
-        return json.loads(_strip_code_fence(text))
-    except json.JSONDecodeError:
-        match = re.search(r"(\{.*\}|\[.*\])", text, flags=re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-        if fallback is not None:
-            return fallback
-        raise
+    candidates = [_strip_code_fence(text)]
+    match = re.search(r"(\{.*\}|\[.*\])", text, flags=re.DOTALL)
+    if match:
+        candidates.append(match.group(1))
+
+    last_error: json.JSONDecodeError | None = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+
+    if fallback is not None:
+        return fallback
+    if last_error:
+        raise last_error
+    raise ValueError("Model did not return JSON.")
 
 
 def _strip_code_fence(text: str) -> str:

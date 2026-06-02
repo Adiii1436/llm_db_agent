@@ -71,11 +71,11 @@ def _render_workflow_controls() -> dict[str, bool]:
     cols = st.columns(4)
     query_enabled = bool(st.session_state[WORKFLOW_KEYS["query_table"]])
     with cols[0]:
-        st.toggle(WORKFLOW_LABELS["research"], key=WORKFLOW_KEYS["research"], disabled=query_enabled, on_change=_disable_query_mode)
+        st.toggle(WORKFLOW_LABELS["research"], key=WORKFLOW_KEYS["research"], disabled=query_enabled, on_change=_select_research_mode)
     with cols[1]:
-        st.toggle(WORKFLOW_LABELS["create_table"], key=WORKFLOW_KEYS["create_table"], disabled=query_enabled, on_change=_disable_query_mode)
+        st.toggle(WORKFLOW_LABELS["create_table"], key=WORKFLOW_KEYS["create_table"], disabled=query_enabled, on_change=_select_extract_mode)
     with cols[2]:
-        st.toggle(WORKFLOW_LABELS["upsert_table"], key=WORKFLOW_KEYS["upsert_table"], disabled=query_enabled, on_change=_disable_query_mode)
+        st.toggle(WORKFLOW_LABELS["upsert_table"], key=WORKFLOW_KEYS["upsert_table"], disabled=query_enabled, on_change=_select_upsert_mode)
     with cols[3]:
         st.toggle(WORKFLOW_LABELS["query_table"], key=WORKFLOW_KEYS["query_table"], on_change=_enable_query_mode)
 
@@ -126,12 +126,24 @@ def _enable_query_mode() -> None:
         st.session_state[WORKFLOW_KEYS["upsert_table"]] = False
 
 
-def _disable_query_mode() -> None:
-    if (
-        st.session_state[WORKFLOW_KEYS["research"]]
-        or st.session_state[WORKFLOW_KEYS["create_table"]]
-        or st.session_state[WORKFLOW_KEYS["upsert_table"]]
-    ):
+def _select_research_mode() -> None:
+    if st.session_state[WORKFLOW_KEYS["research"]]:
+        st.session_state[WORKFLOW_KEYS["create_table"]] = False
+        st.session_state[WORKFLOW_KEYS["upsert_table"]] = False
+        st.session_state[WORKFLOW_KEYS["query_table"]] = False
+
+
+def _select_extract_mode() -> None:
+    if st.session_state[WORKFLOW_KEYS["create_table"]]:
+        st.session_state[WORKFLOW_KEYS["research"]] = False
+        st.session_state[WORKFLOW_KEYS["upsert_table"]] = False
+        st.session_state[WORKFLOW_KEYS["query_table"]] = False
+
+
+def _select_upsert_mode() -> None:
+    if st.session_state[WORKFLOW_KEYS["upsert_table"]]:
+        st.session_state[WORKFLOW_KEYS["research"]] = False
+        st.session_state[WORKFLOW_KEYS["create_table"]] = False
         st.session_state[WORKFLOW_KEYS["query_table"]] = False
 
 

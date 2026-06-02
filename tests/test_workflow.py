@@ -8,6 +8,7 @@ from langgraph.graph import END
 from agent.graph import route_after_research, route_confirmed, route_intent
 from agent.nodes import intent, nl_query, research, write_gate
 from agent.state import AgentState
+from tools import gemini
 from tools.sql import ensure_select_only
 from ui.audit_log_ui import _audit_rows_table
 from ui.chat import WORKFLOW_LABELS
@@ -165,6 +166,81 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(output["display_rows"], rows)
         self.assertEqual(output["response_to_user"], "Acme has a Starter plan priced at 10.")
 
+    def test_food_nutrient_request_uses_specific_extraction_fields(self) -> None:
+        contract = research._field_contract(
+            "What genz prefer in food items and what nutrients are they looking for?",
+            None,
+        )
+
+        self.assertIn("preference_item", contract)
+        self.assertIn("key_nutrients", contract)
+        self.assertEqual(
+            research._suggest_table_name(
+                "Research what genz are preferring in food items",
+                [{"preference_item": "Bowls"}],
+            ),
+            "gen_z_food_preferences",
+        )
+
+    def test_food_quality_gate_repairs_missing_important_column(self) -> None:
+        rows = [
+            {
+                "preference_item": "Protein bowls",
+                "audience_segment": "Gen Z",
+                "order_frequency_signal": "Common delivery-friendly meal format",
+                "preference_driver": "Convenience and health",
+                "key_nutrients": None,
+                "marketing_note": "Promote as a balanced quick meal.",
+                "source_url": "https://example.com/gen-z-food",
+                "weak_optional": None,
+            }
+        ]
+        repaired_rows = [
+            {
+                "preference_item": "Protein bowls",
+                "audience_segment": "Gen Z",
+                "order_frequency_signal": "Common delivery-friendly meal format",
+                "preference_driver": "Convenience and health",
+                "key_nutrients": "Protein, fiber, vitamins",
+                "marketing_note": "Promote as a balanced quick meal.",
+                "source_url": "https://example.com/gen-z-food",
+                "weak_optional": None,
+            }
+        ]
+
+        with patch.object(research, "generate_json", return_value={"rows": repaired_rows}):
+            output = research._quality_gate_rows(
+                AgentState(user_message="Research Gen Z food orders and key nutrients."),
+                rows,
+                "Protein bowls are convenient and provide protein, fiber, and vitamins.",
+            )
+
+        self.assertEqual(output[0]["key_nutrients"], "Protein, fiber, vitamins")
+        self.assertNotIn("weak_optional", output[0])
+        self.assertNotIn(None, output[0].values())
+
+    def test_food_quality_gate_rejects_unresolved_important_blanks(self) -> None:
+        rows = [
+            {
+                "preference_item": "Chicken meals",
+                "audience_segment": "Gen Z",
+                "order_frequency_signal": "Frequently ordered",
+                "preference_driver": "Taste and convenience",
+                "key_nutrients": "",
+                "marketing_note": "Promote quick lunch options.",
+                "source_url": "https://example.com/gen-z-food",
+            }
+        ]
+
+        with patch.object(research, "generate_json", return_value={"rows": rows}):
+            output = research._quality_gate_rows(
+                AgentState(user_message="Research Gen Z food orders and key nutrients."),
+                rows,
+                "Chicken meals are frequently ordered.",
+            )
+
+        self.assertEqual(output, [])
+
     def test_upsert_reuses_previous_extracted_artifact(self) -> None:
         artifact = {
             "id": "structured_table_1",
@@ -258,6 +334,8 @@ class WorkflowTests(unittest.TestCase):
         html = _rows_table([{"name": "<script>", "count": 2}])
 
         self.assertIn("<table", html)
+        self.assertIn("query-results-wrap", html)
+        self.assertIn("query-results-cell", html)
         self.assertIn("&lt;script&gt;", html)
         self.assertNotIn("<script>", html)
 
@@ -279,6 +357,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("<table", html)
         self.assertIn("&lt;foods&gt;", html)
         self.assertNotIn("hidden", html)
+
+    def test_generate_json_returns_fallback_for_malformed_embedded_json(self) -> None:
+        with patch.object(gemini, "generate_text", return_value='Here is JSON: {"rows": [{"name": "A" "score": 1}]}'):
+            result = gemini.generate_json("prompt", fallback={"rows": []})
+
+        self.assertEqual(result, {"rows": []})
 
     def test_write_gate_cancellation_stops_before_db_write(self) -> None:
         state = AgentState(
